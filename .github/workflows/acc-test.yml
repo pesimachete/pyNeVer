@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - automatedtesting2
 
 jobs:
   build:
