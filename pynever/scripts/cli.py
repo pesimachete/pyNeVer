@@ -149,8 +149,8 @@ def verify_CSV_model(property_type: str, csv_file: str, strategy: str):
                     writer_file = open(os.path.abspath('output.csv'), 'a', newline='')
                     net_path = folder + chr(47) + row[0]
                     prop_path = folder + chr(47) + row[1]
-                    response = response and verify_single_model(property_type, net_path, prop_path, strategy,
-                                                                writer_file)
+                    x = verify_single_model(property_type, net_path, prop_path, strategy, writer_file)
+                    response = response and x
                 else:
                     print("This row is not valid: ", row, "\n")
                     return False
