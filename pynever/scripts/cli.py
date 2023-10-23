@@ -147,8 +147,8 @@ def verify_CSV_model(property_type: str, csv_file: str, strategy: str):
             for row in csv_file_iti:
                 if len(row) >= 2:
                     writer_file = open(os.path.abspath('output.csv'), 'a', newline='')
-                    net_path = folder + chr(47) + row[0]
-                    prop_path = folder + chr(47) + row[1]
+                    net_path = folder + chr(92) + row[0]
+                    prop_path = folder + chr(92) + row[1]
                     x = verify_single_model(property_type, net_path, prop_path, strategy, writer_file)
                     response = response and x
                 else:
@@ -182,8 +182,6 @@ def invert_conditions(prop_path):
             else:
                 writer.write(row)
                 continue
-            # pattern = r'(?<!_)-?\d+\.\d+|(?<!_)-?\d+'
-            # temp_row = re.sub(pattern, replace_with_negatives, temp_row)
             temp_row = temp_row[:temp_row.rfind(')')] + temp_row[temp_row.rfind(')') + 1:]
             y_constraints.extend(temp_row)
     writer.write('(assert (or \n')
@@ -191,11 +189,3 @@ def invert_conditions(prop_path):
         writer.write(row)
     writer.write('\n))')
 
-#
-# def replace_with_negatives(match):
-#     number = match.group()
-#     if number not in ("0", "0.0") and match.string[match.start() - 1] != '_':
-#         number = float(number)  # Convert the matched string to a float
-#         negative_number = -number  # Calculate the negative value
-#         return str(negative_number)  # Convert the result back to a string
-#     return number
