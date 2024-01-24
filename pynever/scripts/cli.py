@@ -5,9 +5,14 @@ import re
 import sys
 import time
 
+import numpy as np
+
 import pynever.networks as nets
 import pynever.strategies.conversion as conv
 import pynever.strategies.verification as ver
+from pynever import nodes
+from pynever.strategies.bp.bounds_manager import propagate_convolution_bounds
+from pynever.strategies.bp.linearfunctions import LinearFunctions
 from pynever.tensor import Tensor
 from pynever.utilities import execute_network
 
@@ -60,82 +65,94 @@ def verify_single_model(safety_prop: bool, model_file: str, property_file: str, 
         if alt_repr is not None:
             if isinstance(alt_repr, conv.ONNXNetwork):
                 network = conv.ONNXConverter().to_neural_network(alt_repr)
-
-                if isinstance(network, nets.SequentialNetwork):
-                    # Read the property file
-                    to_verify = ver.NeVerProperty()
-
-                    if safety_prop:
-                        neg_post_condition(prop_path)
-                        to_verify.from_smt_file(os.path.abspath('pynever/scripts/intermediate.vnnlib'))
-                        os.remove('pynever/scripts/intermediate.vnnlib')
-                    else:
-                        to_verify.from_smt_file(prop_path)
-
-                    params = []
-                    if strategy == 'overapprox':
-                        params = [[0] for _ in range(network.count_relu_layers())]
-                    elif strategy == 'mixed':
-                        params = [[1] for _ in range(network.count_relu_layers())]
-                    elif strategy == 'complete':
-                        params = [[10000] for _ in range(network.count_relu_layers())]
-                    ver_strategy = ver.NeverVerification(strategy, params)
-
-                    model_name = os.path.basename(nn_path)
-                    property_name = os.path.basename(property_file)
-
-                    ver_start_time = time.perf_counter()
-                    safe = ver_strategy.verify(network, to_verify)
-                    fancy_cex = None
-                    fancy_out = None
-
-                    if not safe:
-                        if strategy == 'complete':
-                            answer = 'Falsified'
-                            counter_stars = ver_strategy.counterexample_stars
-                            if counter_stars is not None:
-                                cexs = []
-
-                                # Extract counterexamples (one per star is enough)
-                                for cex_star in counter_stars:
-                                    cexs.extend(cex_star.get_samples(num_samples=1))
-
-                                if len(cexs) > 0:
-                                    fancy_cex = reformat_counterexample(cexs[0])
-                                    fancy_out = reformat_counterexample(execute_network(network, cexs[0]))
-                        else:
-                            answer = 'Unknown'
-                    else:
-                        answer = 'Verified'
-
-                    ver_end_time = time.perf_counter() - ver_start_time
-                    print(f'Benchmark: {model_name}, {property_name}')
-                    print('----------------------------')
-                    print(f'Result: {answer}')
-
-                    if answer == 'Falsified':
-                        print(f'Counterexample: {fancy_cex} -> {fancy_out}')
-
-                    print(f'Time elapsed: {ver_end_time}\n\n')
-
-                    with open(logfile, 'a+', newline='') as csv_out:
-                        # Init writer with current file pointer
-                        writer = csv.writer(csv_out)
-
-                        # Set file pointer to the beginning to read the first line
-                        csv_out.seek(0)
-                        if csv_out.readline() == '':
-                            writer.writerow(['Network', 'Property', 'Verification strategy', 'Verification time',
-                                             'Answer', 'Counterexample', 'Unsafe output'])
-
-                        # Write with the writer which still points at the end
-                        writer.writerow([model_name, property_name, strategy, ver_end_time,
-                                         answer, fancy_cex, fancy_out])
-                    return True
-
+            elif isinstance(alt_repr, conv.PyTorchNetwork):
+                network = conv.PyTorchConverter().to_neural_network(alt_repr)
             else:
-                print('The model is not an ONNX model.')
+                print('This network format is not supported')
                 return False
+            if isinstance(network, nets.SequentialNetwork):
+                # Read the property file
+                to_verify = ver.NeVerProperty()
+                if isinstance(network.get_first_node(), nodes.ConvNode):
+                    node = network.get_first_node()
+                    # arr = np.ndarray(shape=(1, 1, 2, 2), dtype=float, buffer=np.array([1.0, 2.0, 3.0, 4.0]))
+                    # print(arr)
+                    # node = nodes.ConvNode(1, (1, 3, 3), 1, (2, 2), (1, 1), (1, 1, 1, 1), (0, 0), 1, True, None, arr)
+                    # input_size = np.prod(node.in_dim)
+                    # input_size = network.get_first_node().in_dim[1]*network.get_first_node().in_dim[2]
+                    lower = LinearFunctions(np.identity(input_size), np.zeros(input_size))
+                    upper = LinearFunctions(np.identity(input_size), np.zeros(input_size))
+                    lower, upper = propagate_convolution_bounds(lower, upper, node)
+                    print(lower)
+                    print(upper)
+
+                if safety_prop:
+                    neg_post_condition(prop_path)
+                    to_verify.from_smt_file(os.path.abspath('pynever/scripts/intermediate.vnnlib'))
+                    os.remove('pynever/scripts/intermediate.vnnlib')
+                else:
+                    to_verify.from_smt_file(prop_path)
+
+                params = []
+                if strategy == 'overapprox':
+                    params = [[0] for _ in range(network.count_relu_layers())]
+                elif strategy == 'mixed':
+                    params = [[1] for _ in range(network.count_relu_layers())]
+                elif strategy == 'complete':
+                    params = [[10000] for _ in range(network.count_relu_layers())]
+                ver_strategy = ver.NeverVerification(strategy, params)
+
+                model_name = os.path.basename(nn_path)
+                property_name = os.path.basename(property_file)
+
+                ver_start_time = time.perf_counter()
+                safe = ver_strategy.verify(network, to_verify)
+                fancy_cex = None
+                fancy_out = None
+
+                if not safe:
+                    if strategy == 'complete':
+                        answer = 'Falsified'
+                        counter_stars = ver_strategy.counterexample_stars
+                        if counter_stars is not None:
+                            cexs = []
+
+                            # Extract counterexamples (one per star is enough)
+                            for cex_star in counter_stars:
+                                cexs.extend(cex_star.get_samples(num_samples=1))
+
+                            if len(cexs) > 0:
+                                fancy_cex = reformat_counterexample(cexs[0])
+                                fancy_out = reformat_counterexample(execute_network(network, cexs[0]))
+                    else:
+                        answer = 'Unknown'
+                else:
+                    answer = 'Verified'
+
+                ver_end_time = time.perf_counter() - ver_start_time
+                print(f'Benchmark: {model_name}, {property_name}')
+                print('----------------------------')
+                print(f'Result: {answer}')
+
+                if answer == 'Falsified':
+                    print(f'Counterexample: {fancy_cex} -> {fancy_out}')
+
+                print(f'Time elapsed: {ver_end_time}\n\n')
+
+                with open(logfile, 'a+', newline='') as csv_out:
+                    # Init writer with current file pointer
+                    writer = csv.writer(csv_out)
+
+                    # Set file pointer to the beginning to read the first line
+                    csv_out.seek(0)
+                    if csv_out.readline() == '':
+                        writer.writerow(['Network', 'Property', 'Verification strategy', 'Verification time',
+                                         'Answer', 'Counterexample', 'Unsafe output'])
+
+                    # Write with the writer which still points at the end
+                    writer.writerow([model_name, property_name, strategy, ver_end_time,
+                                     answer, fancy_cex, fancy_out])
+                return True
 
 
 def verify_CSV_batch(safety_prop: bool, csv_file: str, strategy: str, logfile: str) -> bool:

@@ -5,6 +5,8 @@ from typing import Tuple
 
 import numpy as np
 
+from scipy.linalg import toeplitz
+
 from pynever.tensor import Tensor
 
 
@@ -367,7 +369,7 @@ class ConvNode(LayerNode):
         pixels added at the beginning of axis `i` and xi_end, the number of pixels added at the end of axis `i`.
         Should have size equal to two times the number of dimension n (we don't count the channel dimension).
     dilation : Tuple
-        Dilation value along each spatial axis of the filter
+        Dilation value along each spatial axis of the filters
     groups : int
         Number of groups input channels and output channels are divided into
     has_bias : bool, optional
@@ -458,6 +460,98 @@ class ConvNode(LayerNode):
                       self.kernel_size, self.stride, self.padding, self.dilation, self.groups,
                       self.has_bias, self.bias, self.weight)
 
+    def get_weights_as_fc_matrices(self):
+        """
+        Computes an array of single matrices representing convolution as a number of fully connected layers.
+        Done by computing the toeplitz matrices of the filters.
+
+        This method is used for symbolic bound computation.
+        """
+        weights_shape = self.weight.shape
+
+        input_shape = (1, self.in_dim[0], self.in_dim[1], self.in_dim[2])
+
+
+        matrices = []
+        for f in range(weights_shape[0]):
+            filter_matrices = np.array([self.conv_filter_as_matrix(self.weight[f][ch],
+                                                                   input_shape,
+                                                                   self.stride,
+                                                                   self.padding)
+                                        for ch in range(weights_shape[1])])
+
+            # Interlace the channels in accordance with how input is expected to be
+            #
+            # That is, if filters matrices are X,Y, and Z
+            # big_filter_matrix is of the form
+            #
+            # X[0,0] Y[0,0] Z[0,0] X[0,1] Y[0,1] Z[0,1] ... X[0,n] Y[0,n] Z[0,n]
+            # ...
+            # X[m,0] Y[m,0] Z[m,0] X[m,1] Y[m,1] Z[m,1] ... X[m,n] Y[m,n] Z[m,n]
+            filter_matrices = filter_matrices.transpose(1, 2, 0)
+
+            # Make a 2-dimensional matrix
+            filter_matrices = filter_matrices.reshape(filter_matrices.shape[0], -1)
+            matrices.append(filter_matrices)
+
+        # Assuming there 4 filters with corresponding toeplitz matrices A, B, C and D,
+        # the result is the array
+        #
+        #   [A, B, C, D]
+        return np.array(matrices)
+
+    @staticmethod
+    def conv_filter_as_matrix(filters, input_shape, stride, padding):
+        """
+        Compute the Toeplitz matrix of the filters by taking into account padding and stride.
+        """
+
+        """pick the dimensions of the input"""
+        _, _, I_row_num, I_col_num = input_shape
+
+        """pick the dimensions of the filters"""
+        F_row_num, F_col_num = filters.shape
+        # zero pad the filters
+        # create  zero padded filters with the num
+
+        F_zero_padded = np.pad(filters,((0, 0), (0, int(I_col_num - F_col_num + 2 * padding[0]))), 'constant', constant_values=0)
+
+        toeplitz_list = [np.zeros((int((I_row_num - F_row_num + 2 * padding[1])/stride[0] + 1), I_col_num))]
+        # Compute toeplitz matrix for each row of the filters
+        for i in range(F_zero_padded.shape[0]):
+            r = F_zero_padded[i, :]
+            c = np.r_[r[0], np.zeros(I_row_num - F_row_num + 2 * padding[0])]
+            t = toeplitz(c, r)
+            # Since the toeplitz method computes the toeplitz matrix for stride=1,
+            # we need to filters out some of the rows.
+            # We also remove the outmost columns corresponding to padding.
+            t = t[0:t.shape[0]:stride[0], padding[1]:t.shape[1]-padding[1]]
+            toeplitz_list.append(t)
+
+        # doubly blocked toeplitz indices:
+        # this matrix defines which toeplitz matrix from toeplitz_list goes to which part of the doubly blocked
+        r = np.r_[range(1, F_zero_padded.shape[0] + 1), np.zeros(I_row_num - F_zero_padded.shape[0] + 2 * padding[0], dtype=int)]
+        c = np.r_[r[0], np.zeros(I_row_num - F_row_num + 2 * padding[0], dtype=int)]
+        doubly_indices = toeplitz(c, r)
+        # We do as above, filters out some rows and remove columns corresponding to padding
+        doubly_indices = doubly_indices[0:doubly_indices.shape[0]:stride[0], padding[1]:doubly_indices.shape[1]-padding[1]]
+
+        # create doubly blocked matrix with zero values
+        toeplitz_shape = toeplitz_list[0].shape  # shape of one toeplitz matrix
+        doubly_blocked = np.zeros([toeplitz_shape[0] * doubly_indices.shape[0],
+                                   toeplitz_shape[1] * doubly_indices.shape[1]])
+
+        # tile toeplitz matrices for each row in the doubly blocked matrix
+        b_h, b_w = toeplitz_shape  # height and width of each block
+        for i in range(doubly_indices.shape[0]):
+            for j in range(doubly_indices.shape[1]):
+                start_i = i * b_h
+                start_j = j * b_w
+                end_i = start_i + b_h
+                end_j = start_j + b_w
+                doubly_blocked[start_i: end_i, start_j:end_j] = toeplitz_list[doubly_indices[i, j]]
+
+        return doubly_blocked
 
 class AveragePoolNode(LayerNode):
     """
@@ -554,7 +648,7 @@ class MaxPoolNode(LayerNode):
         pixels added at the beginning of axis `i` and xi_end, the number of pixels added at the end of axis `i`.
         Should have size equal to two times the number of dimension n (we don't count the channel dimension).
     dilation : Tuple
-        Dilation value along each spatial axis of the filter
+        Dilation value along each spatial axis of the filters
     ceil_mode : bool, optional
         In order to use ceil mode. (default: False)
     return_indices: bool
