@@ -57,6 +57,17 @@ class BoundsManager:
                 postactivation_bounds = HyperRectangleBounds(preactivation_bounds.get_lower(),
                                                              preactivation_bounds.get_upper())
 
+            elif isinstance(layers[i], pynever.strategies.abstraction.AbsConvNode):
+                symbolic_dense_output_bounds = self.propagate_convolution_bounds(layers[i], current_input_bounds)
+                preactivation_bounds = symbolic_dense_output_bounds.to_hyper_rectangle_bounds(input_hyper_rect)
+
+                symbolic_activation_output_bounds = symbolic_dense_output_bounds
+                postactivation_bounds = HyperRectangleBounds(preactivation_bounds.get_lower(),
+                                                             preactivation_bounds.get_upper())
+
+            elif isinstance(layers[i], pynever.strategies.abstraction.AbsMaxPoolNode):
+                pass
+
             else:
                 raise Exception("Currently supporting bounds computation only for Relu and Linear activation functions")
 
@@ -105,6 +116,68 @@ class BoundsManager:
         upper = LinearFunctions(upper_matrix, upper_offset)
 
         return lower, upper
+
+    def propagate_convolution_bounds(self,
+                                     convolutional_node : pynever.strategies.abstraction.AbsConvNode,
+                                     bounds : SymbolicLinearBounds) \
+            -> SymbolicLinearBounds:
+        """
+        Compute new lower and upper bound equations,
+        from input lower and upper equations and
+        a linear transformation that can be computed from convolutional filters.
+
+        Importantly, the equations are ordered so that channels are inner most
+        (which is in line with how images are stored in cifar10
+        and what the Dense layer expects after Flatten layer).
+        That is, if output_matrices are of dimensions M x N,
+        the output feature maps are of dimensions rows x columns and
+        there are f output feature maps (equivalently, f filters in the layer),
+        then M = rows x columns x f,
+        the first f rows correspond to the equations of the [0,0] point of the feature maps,
+        the next f rows correspond to the equations of the [0,1] point of the feature maps,
+        etc.
+        """
+        input_lower_eq = bounds.get_lower()
+        input_upper_eq = bounds.get_upper()
+        weights = convolutional_node.ref_node.get_weights_as_fc_matrices()
+        bias = convolutional_node.ref_node.bias
+
+        weights_plus = np.maximum(weights, np.zeros(weights.shape))
+        weights_minus = np.minimum(weights, np.zeros(weights.shape))
+
+        output_lower_matrix = np.array([weights_plus[i].dot(input_lower_eq.get_matrix()) +
+                                        weights_minus[i].dot(input_upper_eq.get_matrix())
+                                        for i in range(weights.shape[0])])
+        # (f, rows x columns, N) -> (rows x columns, f, N)
+        output_lower_matrix = output_lower_matrix.transpose(1, 0, 2)
+        # (rows x columns, f, N) -> (rows x columns x f, N)
+        output_lower_matrix = output_lower_matrix.reshape(-1, output_lower_matrix.shape[-1])
+
+        output_upper_matrix = np.array([weights_plus[i].dot(input_upper_eq.get_matrix()) +
+                                        weights_minus[i].dot(input_lower_eq.get_matrix())
+                                        for i in range(weights.shape[0])])
+        # (f, rows x columns, N) -> (rows x columns, f, N)
+        output_upper_matrix = output_upper_matrix.transpose(1, 0, 2)
+        # (rows x columns, f, N) -> (rows x columns x f, N)
+        output_upper_matrix = output_upper_matrix.reshape(-1, output_upper_matrix.shape[-1])
+        if bias is not None:
+            output_lower_offset = np.array([weights_plus[i].dot(input_lower_eq.get_offset()) +
+                                            weights_minus[i].dot(input_upper_eq.get_offset()) + bias[i]
+                                            for i in range(weights.shape[0])]).transpose().reshape(-1)
+            output_upper_offset = np.array([weights_plus[i].dot(input_upper_eq.get_offset()) +
+                                            weights_minus[i].dot(input_lower_eq.get_offset()) + bias[i]
+                                            for i in range(weights.shape[0])]).transpose().reshape(-1)
+        else:
+            output_lower_offset = np.array([weights_plus[i].dot(input_lower_eq.get_offset()) +
+                                            weights_minus[i].dot(input_upper_eq.get_offset())
+                                            for i in range(weights.shape[0])]).transpose().reshape(-1)
+
+            output_upper_offset = np.array([weights_plus[i].dot(input_upper_eq.get_offset()) +
+                                            weights_minus[i].dot(input_lower_eq.get_offset())
+                                            for i in range(weights.shape[0])]).transpose().reshape(-1)
+
+        return SymbolicLinearBounds(LinearFunctions(output_lower_matrix, output_lower_offset),
+                                    LinearFunctions(output_upper_matrix, output_upper_offset))
 
 
 def get_transformed_matrix(matrix, k):
@@ -175,67 +248,3 @@ def get_abstract_network(abst_network):
         layers.append(node)
 
     return layers
-
-
-def propagate_convolution_bounds(input_lower_eq: LinearFunctions,
-                                 input_upper_eq: LinearFunctions,
-                                 convolutional_node: pynever.nodes.ConvNode) \
-        -> [LinearFunctions, LinearFunctions]:
-    """
-          Compute new lower and upper bound equations,
-          from input lower and upper equations and
-          a linear transformation that can be computed from convolutional filters.
-
-          Importantly, the equations are ordered so that channels are inner most
-          (which is in line with how images are stored in cifar10
-          and what the Dense layer expects after Flatten layer).
-          That is, if output_matrices are of dimensions M x N,
-          the output feature maps are of dimensions rows x columns and
-          there are f output feature maps (equivalently, f filters in the layer),
-          then M = rows x columns x f,
-          the first f rows correspond to the equations of the [0,0] point of the feature maps,
-          the next f rows correspond to the equations of the [0,1] point of the feature maps,
-          etc.
-          """
-
-    weights = convolutional_node.get_weights_as_fc_matrices()
-    bias = convolutional_node.bias
-
-    weights_plus = np.maximum(weights, np.zeros(weights.shape))
-    weights_minus = np.minimum(weights, np.zeros(weights.shape))
-
-    output_lower_matrix = np.array([weights_plus[i].dot(input_lower_eq.get_matrix()) +
-                                    weights_minus[i].dot(input_upper_eq.get_matrix())
-                                    for i in range(weights.shape[0])])
-    # (f, rows x columns, N) -> (rows x columns, f, N)
-    output_lower_matrix = output_lower_matrix.transpose(1, 0, 2)
-    # (rows x columns, f, N) -> (rows x columns x f, N)
-    output_lower_matrix = output_lower_matrix.reshape(-1, output_lower_matrix.shape[-1])
-
-    output_upper_matrix = np.array([weights_plus[i].dot(input_upper_eq.get_matrix()) +
-                                    weights_minus[i].dot(input_lower_eq.get_matrix())
-                                    for i in range(weights.shape[0])])
-    # (f, rows x columns, N) -> (rows x columns, f, N)
-    output_upper_matrix = output_upper_matrix.transpose(1, 0, 2)
-    # (rows x columns, f, N) -> (rows x columns x f, N)
-    output_upper_matrix = output_upper_matrix.reshape(-1, output_upper_matrix.shape[-1])
-    if bias is not None:
-        output_lower_offset = np.array([weights_plus[i].dot(input_lower_eq.get_offset()) +
-                                        weights_minus[i].dot(input_upper_eq.get_offset()) + bias[i]
-                                        for i in range(weights.shape[0])]).transpose().reshape(-1)
-        output_upper_offset = np.array([weights_plus[i].dot(input_upper_eq.get_offset()) +
-                                        weights_minus[i].dot(input_lower_eq.get_offset()) + bias[i]
-                                        for i in range(weights.shape[0])]).transpose().reshape(-1)
-    else:
-        output_lower_offset = np.array([weights_plus[i].dot(input_lower_eq.get_offset()) +
-                                        weights_minus[i].dot(input_upper_eq.get_offset())
-                                        for i in range(weights.shape[0])]).transpose().reshape(-1)
-
-        output_upper_offset = np.array([weights_plus[i].dot(input_upper_eq.get_offset()) +
-                                        weights_minus[i].dot(input_lower_eq.get_offset())
-                                        for i in range(weights.shape[0])]).transpose().reshape(-1)
-
-    return LinearFunctions(output_lower_matrix, output_lower_offset), \
-        LinearFunctions(output_upper_matrix, output_upper_offset)
-
-

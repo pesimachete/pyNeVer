@@ -13,6 +13,7 @@ import pynever.networks as networks
 import pynever.nodes as nodes
 import pynever.pytorch_layers as pyt_layers
 import pynever.strategies.abstraction as abst
+import pynever.strategies.bp.bounds_manager
 import pynever.strategies.conversion as conv
 import pynever.strategies.smt_reading as reading
 import pynever.utilities as utils
@@ -306,8 +307,9 @@ class NeverVerification(VerificationStrategy):
         # Compute symbolic bounds first. If the network architecture or the property
         # does not have a corresponding bound propagation method we skip the computation
         try:
-            bound_manager = BoundsManager(abst_network, prop)
+            bound_manager = pynever.strategies.bp.bounds_manager.BoundsManager(abst_network, prop)
             _, _, self.layers_bounds = bound_manager.compute_bounds()
+            print(self.layers_bounds)
         except AssertionError:
             self.logger.warning(f"Warning: Bound propagation unsupported")
             self.layers_bounds = {}
@@ -393,6 +395,15 @@ class NeverVerification(VerificationStrategy):
 
                 relu_count += 1
 
+            elif isinstance(current_node, nodes.ConvNode):
+                abst_network.add_node(abst.AbsConvNode("ABST_" + current_node.identifier, current_node))
+
+            elif isinstance(current_node, nodes.MaxPoolNode):
+                abst_network.add_node(abst.AbsMaxPoolNode("ABST_"+current_node.identifier, current_node))
+
+            elif isinstance(current_node, nodes.FlattenNode):
+                pass
+
             else:
                 raise Exception(f"Node type: {current_node.__class__} not supported")
 
@@ -471,6 +482,45 @@ class NeverVerification(VerificationStrategy):
             counterexample_stars.append(temp_star)
 
         return counterexample_stars
+    #
+    # def verify_cnn(self, network: networks.NeuralNetwork, prop: Property):
+    #     if isinstance(prop, NeVerProperty):
+    #         lb, ub = self.__get_input_bounds(prop.in_coef_mat, prop.in_bias_mat)
+    #         if lb.__len__() != len(ub):
+    #             raise Exception("Missing conditions")
+    #     else:
+    #         raise Exception("Only NeVerProperty are supported at present")
+    #
+    #     for layer in network.nodes:
+    #         if isinstance(layer, nodes.ReLUNode):
+    #         elif isinstance(layer, nodes.ConvNode):
+    #             lb, ub = self.__compute_max_pool_layer(lb, ub)
+    #         elif isinstance(layer, nodes.MaxPoolNode):
+    #             lb, ub = self.__compute_max_pool_layer(lb, ub)
+    #         elif isinstance(layer, nodes.FlattenNode):
+    #             print(lb, ub)
+    #         elif isinstance(layer, nodes.FullyConnectedNode):
+    #             print(lb,ub)
+    #         else:
+    #
+
+
+
+    # def __get_input_bounds(self, mat_c, mat_b):
+    #     lb = []
+    #     ub = []
+    #     for row, bias in zip(mat_c, mat_b):
+    #         for i in row:
+    #             if i == -1:
+    #                 lb.append(float(bias)*-1 if bias != 0 else 0.0)
+    #                 break
+    #             elif i == 1:
+    #                 ub.append(float(bias))
+    #                 break
+    #     return lb, ub
+
+    # def __compute_max_pool_layer(self, lb, ub):
+    #     pass
 
 
 class NeverVerificationRef(VerificationStrategy):

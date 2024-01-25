@@ -8,10 +8,10 @@ import time
 import numpy as np
 
 import pynever.networks as nets
+import pynever.strategies.bp.bounds_manager
 import pynever.strategies.conversion as conv
 import pynever.strategies.verification as ver
 from pynever import nodes
-from pynever.strategies.bp.bounds_manager import propagate_convolution_bounds
 from pynever.strategies.bp.linearfunctions import LinearFunctions
 from pynever.tensor import Tensor
 from pynever.utilities import execute_network
@@ -73,18 +73,16 @@ def verify_single_model(safety_prop: bool, model_file: str, property_file: str, 
             if isinstance(network, nets.SequentialNetwork):
                 # Read the property file
                 to_verify = ver.NeVerProperty()
-                if isinstance(network.get_first_node(), nodes.ConvNode):
-                    node = network.get_first_node()
-                    # arr = np.ndarray(shape=(1, 1, 2, 2), dtype=float, buffer=np.array([1.0, 2.0, 3.0, 4.0]))
-                    # print(arr)
-                    # node = nodes.ConvNode(1, (1, 3, 3), 1, (2, 2), (1, 1), (1, 1, 1, 1), (0, 0), 1, True, None, arr)
-                    # input_size = np.prod(node.in_dim)
-                    # input_size = network.get_first_node().in_dim[1]*network.get_first_node().in_dim[2]
-                    lower = LinearFunctions(np.identity(input_size), np.zeros(input_size))
-                    upper = LinearFunctions(np.identity(input_size), np.zeros(input_size))
-                    lower, upper = propagate_convolution_bounds(lower, upper, node)
-                    print(lower)
-                    print(upper)
+                # if isinstance(network.get_first_node(), nodes.ConvNode):
+                #     node = network.get_first_node()
+                #
+                #     input_size = np.prod(node.in_dim)
+                #     # input_size = network.get_first_node().in_dim[1]*network.get_first_node().in_dim[2]
+                #     lower = LinearFunctions(np.identity(input_size), np.zeros(input_size))
+                #     upper = LinearFunctions(np.identity(input_size), np.zeros(input_size))
+                #     lower, upper =pynever.strategies.bp.bounds_manager.BoundsManager().propagate_convolution_bounds(lower, upper, node)
+                #     print(lower)
+                #     print(upper)
 
                 if safety_prop:
                     neg_post_condition(prop_path)
@@ -283,3 +281,7 @@ def neg_post_condition(prop_path: str) -> None:
             for row in y_constraints:
                 new_prop.write(row)
             new_prop.write('\n))')
+
+
+# arr = np.ndarray(shape=(1, 1, 2, 2), dtype=float, buffer=np.array([1.0, 2.0, 3.0, 4.0]))
+# node = nodes.ConvNode('aaaa', (1, 3, 3), 1, (2, 2), (1, 1), (1, 1, 1, 1), (0, 0), 1, True, None, arr)
